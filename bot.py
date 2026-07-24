@@ -42,8 +42,8 @@ LOGIN_URL = "https://turkmenistanairlines.tm/tm/auth/login"
 
 ORIGIN_CITY = "Ashgabat"
 ORIGIN_CODE = "ASB"
-DEST_CITY = "Beijing"
-DEST_CODE = "PEK"
+DEST_CITY = "İstanbul"
+DEST_CODE = "İST"
 DEPARTURE_DAY = 1
 DEPARTURE_MONTH = 8   # Ağustos
 DEPARTURE_YEAR = 2026
