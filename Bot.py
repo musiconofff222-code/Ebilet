@@ -812,4 +812,23 @@ if __name__ == "__main__":
             if target_url:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
                 confirmed = True
-        except Exception as 
+        except Exception as e:
+            err_msg = f"⚠️ <b>Bot Çalışırken Hata Meydana Geldi!</b>\n\nDetay: <code>{str(e)}</code>"
+            logging.error(f"Kritik hata: {e}")
+            try:
+                if page is not None:
+                    page.screenshot(path="hata_durumu.png")
+                    send_telegram(err_msg, photo_path="hata_durumu.png")
+                else:
+                    send_telegram(err_msg)
+            except Exception:
+                send_telegram(err_msg)
+
+        finally:
+            if browser is not None:
+                logging.info("Tarayıcı kapatılıyor.")
+                browser.close()
+
+
+if __name__ == "__main__":
+    run_ticket_bot()
