@@ -5,6 +5,7 @@ import logging
 import warnings
 import random
 import requests
+import ddddocr
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -39,9 +40,6 @@ LOGIN_URL = "https://turkmenistanairlines.tm/tm/auth/login"
 
 ORIGIN_CITY = "Ashgabat"
 ORIGIN_CODE = "ASB"
-# Not: site arayüzü şehri Türkmence yazıyor (ekran görüntülerinde "Stambul" olarak
-# görünüyor). Dropdown'da IATA kodu (IST) üzerinden de eşleşme arandığı için
-# şehir adı yazımı biraz farklı olsa da IST kodu genelde eşleşmeyi sağlar.
 DEST_CITY = "Stambul"
 DEST_CODE = "IST"
 DEPARTURE_DAY = 1
@@ -177,7 +175,6 @@ def robust_click(ctx, locator, timeout=10000):
 
 
 def _first_visible(locator):
-    """Bir locator'daki eşleşmeler arasından ilk GÖRÜNÜR olanı döndürür."""
     try:
         count = locator.count()
     except Exception:
@@ -322,7 +319,6 @@ def select_city(page, field_id: str, city_name: str, iata_code: str, timeout=120
             f"{field_id}: '{city_name}' ({iata_code}) dropdown'da bulunamadı/seçilemedi"
         )
 
-    # --- YENİ: hidden/gerçek input değerini doğrula ---
     try:
         actual_value = ctx.locator(f"#{field_id}").input_value()
     except Exception:
@@ -353,7 +349,6 @@ def select_departure_date(page, day: int, month: int, year: int, field_id: str =
     date_key = f"{month}/{day}/{year}"
     cell = ctx.locator(f"li[data-date-input='{date_key}']").first
 
-    # --- YENİ: eğer istenen ay/yıl takvimde açık değilse "ileri" oklarına basıp aramayı dene ---
     max_month_clicks = 12
     clicks_done = 0
     next_button_selectors = [
@@ -393,11 +388,6 @@ def select_departure_date(page, day: int, month: int, year: int, field_id: str =
 
     logging.info(f"✅ Gidiş tarihi -> {date_key} seçildi.")
 
-    # --- DEĞİŞTİ: Escape + rastgele nokta tıklaması KALDIRILDI.
-    # Bazı SPA formlarında Escape / dışarı tıklama, henüz commit edilmemiş
-    # form state'ini resetleyebiliyor. Onun yerine sadece takvimin
-    # kapanmasını bekliyoruz; kapanmazsa input alanının kendisine tıklayıp
-    # (dışarıya değil) kapatmayı deniyoruz.
     page.wait_for_timeout(500)
     try:
         calendar_still_open = ctx.locator(f"li[data-date-input='{date_key}']").first.is_visible()
@@ -410,7 +400,6 @@ def select_departure_date(page, day: int, month: int, year: int, field_id: str =
         except Exception:
             pass
 
-    # --- YENİ: gerçek input değerini doğrula ---
     try:
         actual_value = field.input_value()
     except Exception:
@@ -424,7 +413,6 @@ def select_departure_date(page, day: int, month: int, year: int, field_id: str =
 
 
 def debug_form_state(page):
-    """Submit'ten hemen önce formun gerçekte ne gördüğünü kaydeder."""
     try:
         state = page.evaluate(
             """
@@ -462,12 +450,6 @@ def click_search_button(page, timeout=12000):
         capture_debug(page, "search_button_not_found")
         raise Exception("external-ticket-submit butonu bulunamadı")
 
-    # --- YENİ: submit sırasında yapılan TÜM redirect zincirini yakala ---
-    # Önceki sürüm sadece url'inde "search/flight/ticket/external" geçen 200'leri
-    # yakalıyordu; ana sayfaya geri dönen SON redirect'in url'i bu kelimeleri
-    # içermediği için hiç loglanmıyordu. Şimdi her 3xx yanıtı, Location
-    # header'ıyla birlikte, url'ine bakmaksızın yakalıyoruz. 4xx/5xx ve
-    # arama ile ilgili 200'ler de ayrıca loglanıyor.
     captured_responses = []
     failed_requests = []
 
@@ -495,7 +477,6 @@ def click_search_button(page, timeout=12000):
     page.on("response", _on_response)
     page.on("requestfailed", _on_request_failed)
 
-    # Submit öncesi formun gerçek değerlerini logla/gönder
     form_state = debug_form_state(page)
 
     url_before = page.url
@@ -515,7 +496,6 @@ def click_search_button(page, timeout=12000):
     except PlaywrightTimeoutError:
         pass
 
-    # Redirect zincirinin tamamen oturması için biraz daha bekle
     page.wait_for_timeout(3000)
     page.remove_listener("response", _on_response)
     page.remove_listener("requestfailed", _on_request_failed)
@@ -530,16 +510,11 @@ def click_search_button(page, timeout=12000):
     for url, failure in failed_requests:
         logging.warning(f"❌ Başarısız istek: {url} - Sebep: {failure}")
 
-    # --- ana sayfaya/anasayfa benzeri bir yere geri düştük mü tespit et ---
     landed_on_home = (
         url_after.rstrip("/") == HOME_URL.rstrip("/")
         or (url_after.rstrip("/") == url_before.rstrip("/") and "search" not in url_after.lower())
     )
 
-    # --- YENİ: "ana sayfaya düştük" gibi görünen durum aslında captcha popup'ı olabilir.
-    # URL değişmez çünkü site captcha'yı aynı sayfanın üstüne modal olarak açıyor.
-    # JS'nin popup'ı DOM'a enjekte edip görünür kılması biraz gecikebilir, bu yüzden
-    # tek seferlik değil, kısa aralıklarla birkaç kez kontrol ediyoruz.
     if landed_on_home:
         captcha_popup, captcha_sel = None, None
         for _ in range(5):
@@ -585,7 +560,6 @@ def click_search_button(page, timeout=12000):
 
 
 def get_last_update_id():
-    """Telegram'daki mevcut en son update_id'yi döndürür (offset başlangıcı için)."""
     try:
         resp = requests.get(f"{TELEGRAM_API}/getUpdates", params={"limit": 1, "offset": -1}, timeout=15)
         results = resp.json().get("result", [])
@@ -597,10 +571,6 @@ def get_last_update_id():
 
 
 def get_telegram_reply(after_update_id=None, timeout=300, poll_interval=5):
-    """
-    CHAT_ID'den gelecek bir sonraki metin mesajını long-polling ile bekler.
-    Kullanıcı Telegram'da captcha cevabını yazana kadar (veya timeout'a kadar) bekler.
-    """
     start = time.time()
     offset = (after_update_id + 1) if after_update_id else None
     while time.time() - start < timeout:
@@ -623,17 +593,6 @@ def get_telegram_reply(after_update_id=None, timeout=300, poll_interval=5):
 
 
 def find_captcha_popup(page):
-    """
-    Arama sonrası açılan captcha popup'ını tespit eder.
-    Site şu yapıyı kullanıyor (debug dump'larından doğrulandı):
-        <div id="captchaPopup" class="popup"> ... <input id="captchaInput" ...> ... </div>
-    Görsel <img> değil, #refreshRecaptcha span'ine JS ile arka plan resmi basılıyor,
-    bu yüzden görsel varlığı şart koşulmuyor.
-
-    NOT: Popup DOM'a ekleniyor ama siteyi görünür kılan JS (class/style toggle)
-    bazen tetiklenmiyor (muhtemelen otomasyon ortamında). Bu yüzden is_visible()
-    False dönse bile, element DOM'da MEVCUTSA onu zorla görünür kılıp kullanıyoruz.
-    """
     selectors = [
         "#captchaPopup",
         "[id*='captcha' i]",
@@ -648,7 +607,6 @@ def find_captcha_popup(page):
                 continue
             if loc.is_visible():
                 return loc, sel
-            # --- DOM'da var ama görünmüyor: zorla görünür kılmayı dene ---
             try:
                 loc.evaluate(
                     """el => {
@@ -677,15 +635,10 @@ def find_captcha_popup(page):
 
 def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, submit_url_builder=None):
     """
-    Arama butonuna tıklandıktan sonra (veya herhangi bir sayfada captcha çıkabilecek
-    başka bir navigasyondan sonra) çağrılır.
-    1) Captcha popup'ı var mı diye bakar (yoksa sessizce çıkar)
-    2) Varsa gerçek görseli /refresh-captcha'dan çekip ekran görüntüsünü Telegram'a yollar
-    3) Kullanıcının Telegram'dan yazacağı cevabı bekler (yarı otomatik)
-    4) Cevabı, submit_url_builder(answer) ile üretilen URL'e giderek gönderir.
-       submit_url_builder verilmezse (varsayılan arama akışı), ORIGIN/DEST/DEPARTURE
-       sabitleriyle /tm/flights/search URL'i kendisi kurar. Farklı bir sayfa
-       (ör. aylık takvim) için özel bir builder verilebilir.
+    Arama butonuna tıklandıktan sonra çağrılır.
+    - ddddocr ile CAPTCHA görselini okuyup otomatik doldurur.
+    - Ekran görüntüsünü Telegram'a bilgilendirme amaçlı gönderir.
+    - OCR başarısız olursa yedek olarak Telegram üzerinden elle girişi bekler.
     """
     page.wait_for_timeout(wait_after_click)
     popup, matched_sel = find_captcha_popup(page)
@@ -695,7 +648,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
 
     logging.info(f"🧩 Captcha popup tespit edildi (selector: {matched_sel}).")
 
-    # --- YENİ: görsel neden yüklenmiyor teşhisi için network + console/JS hatalarını izle ---
     diag_network_hits = []
     diag_console_msgs = []
     diag_page_errors = []
@@ -725,24 +677,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
     page.on("console", _on_diag_console)
     page.on("pageerror", _on_diag_pageerror)
 
-    # --- DEĞİŞTİ: home.js incelendiğinde görüldü ki #refreshRecaptcha'ya HİÇBİR
-    # click/addEventListener bağlı değil — o span'e tıklamanın sıfır etkisi var.
-    # Görseli gerçekte dolduran mekanizma, sitenin TicketValidation._submit()
-    # fonksiyonunda şu şekilde çalışıyor:
-    #
-    #   const xmlhttp = new XMLHttpRequest();
-    #   xmlhttp.open("POST", "/refresh-captcha");
-    #   xmlhttp.send();
-    #   xmlhttp.onload = function () {
-    #       document.getElementById("refreshRecaptcha").innerHTML = this.responseText;
-    #   };
-    #
-    # Yani sunucudan POST /refresh-captcha ile ham HTML dönüyor ve doğrudan
-    # #refreshRecaptcha'nın innerHTML'ine yazılıyor. Tıklamaya güvenmek yerine
-    # bu isteği kendimiz atıp aynı şekilde innerHTML'i biz dolduruyoruz.
-    # page.request, tarayıcı context'iyle aynı çerezleri (session) paylaştığı
-    # için ekstra login/CSRF header gerekmiyor (site'nin kendi JS'i de header
-    # eklemiyor).
     captcha_html_len = 0
     try:
         refresh_resp = page.request.post("https://turkmenistanairlines.tm/refresh-captcha")
@@ -762,7 +696,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
     except Exception as e:
         logging.warning(f"⚠️ /refresh-captcha isteği atılamadı: {e}")
 
-    # --- Görsel/element boyutu bazı durumlarda 0 kalabiliyor, minimum boyut zorluyoruz ---
     try:
         refresh_el = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first
         if refresh_el.count() == 0:
@@ -780,7 +713,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
     except Exception:
         pass
 
-    # --- Eğer doğrudan istek başarısız olduysa, eski tıklama yöntemini yedek olarak dene ---
     if captcha_html_len == 0:
         try:
             refresh_el = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first
@@ -788,7 +720,7 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
                 refresh_el = page.locator("#refreshRecaptcha, .refreshRecaptcha").first
             if refresh_el.count() > 0:
                 robust_click(page, refresh_el, timeout=5000)
-                logging.info("🔄 Yedek plan: refreshRecaptcha tıklandı (muhtemelen etkisiz).")
+                logging.info("🔄 Yedek plan: refreshRecaptcha tıklandı.")
         except Exception as e:
             logging.warning(f"refreshRecaptcha tıklanamadı: {e}")
 
@@ -798,87 +730,63 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
     page.remove_listener("console", _on_diag_console)
     page.remove_listener("pageerror", _on_diag_pageerror)
 
-    if diag_network_hits or diag_console_msgs or diag_page_errors:
-        diag_lines = ["🔬 <b>Captcha görsel teşhisi:</b>"]
-        if diag_network_hits:
-            diag_lines.append("Captcha ile ilgili network istekleri:")
-            for status, url in diag_network_hits:
-                diag_lines.append(f"• {status} — {url}")
-        else:
-            diag_lines.append("Captcha ile ilgili HİÇBİR network isteği yakalanmadı (tıklama isteği tetiklemedi).")
-        if diag_page_errors:
-            diag_lines.append("\nJS sayfa hataları:")
-            for e in diag_page_errors[:5]:
-                diag_lines.append(f"• {e}")
-        if diag_console_msgs:
-            diag_lines.append("\nConsole error/warning:")
-            for m in diag_console_msgs[:5]:
-                diag_lines.append(f"• {m}")
-        send_telegram("\n".join(diag_lines))
-        logging.info("\n".join(diag_lines))
-
     shot_path = "captcha_popup.png"
     try:
         popup.screenshot(path=shot_path)
     except Exception:
         page.screenshot(path=shot_path)
 
-    # --- YENİ: görsel gerçekten yüklendi mi diye teşhis ---
-    # /refresh-captcha'nın dönen innerHTML'i arka planı doğrudan #refreshRecaptcha
-    # üzerine değil, içine eklenen bir alt elemente (ör. <img> ya da <style>) de
-    # koymuş olabilir; bu yüzden hem kendi background-image'ına hem de
-    # innerHTML'in dolu olup olmadığına bakıyoruz.
-    image_loaded = False
+    # =========================================================================
+    # OTOMATİK CAPTCHA ÇÖZÜMÜ (ddddocr)
+    # =========================================================================
+    answer = None
     try:
-        bg_info = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first.evaluate(
-            """el => {
-                const cs = window.getComputedStyle(el);
-                let childBg = false;
-                el.querySelectorAll('*').forEach(c => {
-                    const ccs = window.getComputedStyle(c);
-                    if (ccs.backgroundImage && ccs.backgroundImage !== 'none') childBg = true;
-                });
-                return {
-                    bg: cs.backgroundImage,
-                    w: el.offsetWidth,
-                    h: el.offsetHeight,
-                    innerHTMLLength: (el.innerHTML || '').trim().length,
-                    hasImgTag: /<img[\\s>]/i.test(el.innerHTML || ''),
-                    childBg: childBg
-                };
-            }"""
-        )
-        logging.info(f"Captcha görsel bilgisi: {bg_info}")
-        if (
-            (bg_info.get("bg") and bg_info["bg"] != "none")
-            or bg_info.get("childBg")
-            or bg_info.get("hasImgTag")
-            or bg_info.get("innerHTMLLength", 0) > 0
-        ):
-            image_loaded = True
+        ocr = ddddocr.DdddOcr(show_ad=False)
+        captcha_img_bytes = None
+
+        # 1. Öncelik: Doğrudan Captcha alanının (element) ekran görüntüsünü al
+        try:
+            refresh_el = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first
+            if refresh_el.count() == 0:
+                refresh_el = page.locator("#refreshRecaptcha, .refreshRecaptcha").first
+            if refresh_el.count() > 0 and refresh_el.is_visible():
+                captcha_img_bytes = refresh_el.screenshot()
+        except Exception as e:
+            logging.warning(f"Captcha elemanının ekran görüntüsü alınamadı: {e}")
+
+        # 2. Öncelik: Eleman resmi alınamadıysa oluşturulan shot_path dosyasını oku
+        if not captcha_img_bytes and os.path.exists(shot_path):
+            with open(shot_path, "rb") as f:
+                captcha_img_bytes = f.read()
+
+        if captcha_img_bytes:
+            parsed_text = ocr.classification(captcha_img_bytes)
+            if parsed_text and str(parsed_text).strip():
+                answer = str(parsed_text).strip()
+                logging.info(f"🤖 ddddocr başarıyla captcha okudu: {answer}")
     except Exception as e:
-        logging.warning(f"Captcha görsel kontrolü yapılamadı: {e}")
+        logging.error(f"ddddocr çalıştırılırken hata oluştu: {e}")
 
-    if not image_loaded:
-        logging.warning("⚠️ Captcha görseli yüklenmemiş görünüyor (arka plan resmi yok).")
-        capture_debug(page, "captcha_image_not_loaded")
-
-    last_update_id = get_last_update_id()
-
-    send_telegram(
-        "🧩 <b>Captcha tespit edildi!</b>\n\n"
-        "Lütfen görseldeki kodu bu sohbete yazın (sadece cevabı yazın)."
-        + ("" if image_loaded else "\n\n⚠️ Görsel yüklenmemiş olabilir, debug dump'ına bakın."),
-        photo_path=shot_path
-    )
-
-    answer, _ = get_telegram_reply(after_update_id=last_update_id, timeout=answer_timeout)
+    # Otomatik okuma başarısız olursa yedek olarak Telegram'dan elle yanıt alma akışı
+    if not answer:
+        logging.warning("⚠️ ddddocr ile captcha okunamadı. Telegram üzerinden manuel yanıt bekleniyor...")
+        last_update_id = get_last_update_id()
+        send_telegram(
+            "🧩 <b>Captcha tespit edildi (Otomatik okunamadı)!</b>\n\n"
+            "Lütfen görseldeki kodu bu sohbete yazın.",
+            photo_path=shot_path
+        )
+        answer, _ = get_telegram_reply(after_update_id=last_update_id, timeout=answer_timeout)
 
     if not answer:
-        send_telegram("⏱️ Captcha cevabı zamanında gelmedi, işlem durduruluyor.")
-        raise Exception("Captcha cevabı Telegram'dan alınamadı (timeout)")
+        send_telegram("⏱️ Captcha cevabı alınamadı, işlem durduruluyor.")
+        raise Exception("Captcha cevabı alınamadı (timeout / OCR başarısız)")
 
-    logging.info(f"✅ Telegram'dan captcha cevabı alındı: {answer}")
+    logging.info(f"✅ Kullanılacak captcha cevabı: {answer}")
+    send_telegram(
+        f"🤖 <b>Captcha Otomatik Geçiliyor:</b> <code>{answer}</code>",
+        photo_path=shot_path
+    )
 
     input_selectors = [
         "#captchaInput",
@@ -905,40 +813,9 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
         capture_debug(page, "captcha_input_not_found")
         raise Exception("Captcha input alanı bulunamadı, cevap yazılamadı")
 
-    # --- DEĞİŞTİ: home.js'e göre #submitCaptcha'nın onclick'i, sitenin ana JS
-    # akışı (TicketValidation._submit) her tetiklendiğinde YENİDEN atanıyor:
-    #
-    #   document.getElementById('submitCaptcha').onclick = function () {
-    #       var captchaValue = document.getElementById('captchaInput').value;
-    #       var form = document.forms['external_ticket_search'];
-    #       var formData = new URLSearchParams(new FormData(form));
-    #       formData.append('captcha', captchaValue);
-    #       var url = form.action + '?' + formData.toString();
-    #       window.location.href = url;
-    #   }
-    #
-    # Sorun şu: bu handler sadece #external-ticket-submit tıklandığında
-    # (yani _submit() çalıştığında) bağlanıyor. Eğer o tıklama arka planda
-    # sayfayı yeniden yüklettiyse (ana sayfaya geri dönüş vb.), bu onclick
-    # KAYBOLMUŞ oluyor ve #submitCaptcha'ya tıklamanın hiçbir etkisi kalmıyor
-    # (tıpkı refreshRecaptcha'da olduğu gibi — "tıklandı" görünüyor ama sonuç
-    # yok). Bu yüzden tıklamaya güvenmek yerine aynı URL'i biz oluşturup
-    # doğrudan gidiyoruz.
-    # --- DEĞİŞTİ: form'un O ANKİ durumuna güvenmek tehlikeli — çünkü arama
-    # butonuna ilk tıklandığında site arka planda sayfayı ana sayfaya geri
-    # yüklüyor (bkz. click_search_button/landed_on_home), ve bu yeniden
-    # yüklemede departPort/arrivalPort/departDate gizli inputları SIFIRLANIYOR
-    # (debug HTML dump'ında bunlar boş <input hidden> olarak görüldü). Yani
-    # `new FormData(form)` ile URL kurmak boş rota bilgisiyle sunucuya gidip
-    # tekrar captcha'ya düşülmesine (sonsuz döngüye) yol açıyordu. Bunun yerine
-    # zaten bildiğimiz sabit değerleri (ORIGIN_CODE/DEST_CODE/DEPARTURE_*)
-    # doğrudan biz gömüyoruz; sayfadan sadece o an geçerli _token'ı (CSRF)
-    # okuyoruz çünkü o her zaman mevcut ve session'a özel.
     confirmed = False
 
     if submit_url_builder is not None:
-        # --- Çağıran taraf (ör. aylık takvim akışı) kendi URL'ini biliyor;
-        # onu kullanıyoruz, arama sayfasına özgü varsayımlar yapmıyoruz. ---
         try:
             target_url = submit_url_builder(answer)
         except Exception as e:
@@ -1008,7 +885,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
             except Exception as e:
                 logging.warning(f"⚠️ Yedek yöntem de başarısız: {e}")
 
-    # --- Yedek plan: yukarıdaki başarısız olursa eski tıklama yöntemlerini dene ---
     if not confirmed:
         try:
             submit_btn = popup.locator("#submitCaptcha").first
@@ -1057,7 +933,7 @@ def run_ticket_bot():
     logging.info("=== Türkmenistan Airlines Bilet Botu Başlatıldı ===")
     send_telegram("🧪 Test: Bot başladı, Telegram bağlantısı çalışıyor mu?")
 
-    page = None  # --- DÜZELTME: except bloğunda NameError almamak için ---
+    page = None
 
     with sync_playwright() as p:
         chosen_user_agent = random.choice(USER_AGENT_POOL)
@@ -1114,7 +990,6 @@ def run_ticket_bot():
             # --- GİRİŞ ---
             run_with_retries("Giriş yapma", login, page, retries=1)
 
-            # Giriş sonrası hesap sayfasına düştük, ana sayfaya geri dönelim
             logging.info("Ana sayfaya geri dönülüyor...")
             page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(3)
@@ -1144,7 +1019,7 @@ def run_ticket_bot():
 
             run_with_retries("Arama butonu", click_search_button, page)
 
-            # --- Captcha kontrolü: varsa Telegram üzerinden yarı otomatik çözülür ---
+            # Otomatik ddddocr çözümü
             try:
                 handle_captcha_if_present(page)
             except Exception as e:
@@ -1164,13 +1039,6 @@ def run_ticket_bot():
                 "📌 İşlemler başarıyla tamamlandı."
             )
 
-            # --- YENİ: Aylık takvim görünümü ---
-            # Arama sonucu sayfasındaki "data-slider__calendar" linki, o ayın
-            # tamamının müsaitlik/fiyat özetini gösteren sayfaya gidiyor.
-            # Bu link düz bir <a href> (JS captcha binding'i yok), ama sunucu
-            # yine de bu isteği captcha ile koruyor olabilir — bu yüzden
-            # handle_captcha_if_present'i burada da (kendi URL'ine özel bir
-            # submit_url_builder ile) tekrar kullanıyoruz.
             try:
                 calendar_href = page.locator("a.data-slider__calendar").first.get_attribute("href")
             except Exception:
@@ -1225,3 +1093,4 @@ def run_ticket_bot():
 
 if __name__ == "__main__":
     run_ticket_bot()
+   
