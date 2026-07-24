@@ -42,7 +42,7 @@ LOGIN_URL = "https://turkmenistanairlines.tm/tm/auth/login"
 
 ORIGIN_CITY = "Ashgabat"
 ORIGIN_CODE = "ASB"
-DEST_CITY = "İstanbul"
+DEST_CITY = "Stambul"
 DEST_CODE = "IST"
 DEPARTURE_DAY = 1
 DEPARTURE_MONTH = 8   # Ağustos
@@ -53,29 +53,16 @@ DEPARTURE_YEAR = 2026
 # YARDIMCI VE BROWSER FONKSİYONLARI
 # =====================================================================
 def preprocess_captcha_image(img_bytes):
-    """
-    CAPTCHA görselini ddddocr'ın daha rahat ve doğru okuması için iyileştirir:
-    - Büyütme (Upscaling)
-    - Grayscale dönüşümü
-    - Kontrast ve Keskinlik artırma
-    """
     try:
         image = Image.open(io.BytesIO(img_bytes))
         if image.mode != 'RGB':
             image = image.convert('RGB')
 
-        # 1. Büyütme (3x)
         w, h = image.size
         image = image.resize((w * 3, h * 3), Image.Resampling.LANCZOS)
-
-        # 2. Siyah-Beyaz / Gri Tonlama
         image = image.convert('L')
-
-        # 3. Kontrast Artırma
         enhancer = ImageEnhance.Contrast(image)
         image = enhancer.enhance(2.5)
-
-        # 4. Keskinleştirme
         sharpness = ImageEnhance.Sharpness(image)
         image = sharpness.enhance(2.0)
 
@@ -168,16 +155,7 @@ def capture_debug(page, tag):
 
     errors = extract_form_errors(page)
     if errors:
-        error_block = "\n\n⚠️ <b>Form Hataları Tespit Edildi:</b>\n" + "\n".join(
-            f"• {e}" for e in errors
-        )
         logging.warning(f"[{tag}] Form hataları: {errors}")
-    else:
-        error_block = ""
-
-    send_telegram(f"🔎 <b>Debug:</b> {tag}\nURL: {page.url}{error_block}", photo_path=shot_path)
-    if os.path.exists(html_path):
-        send_telegram_document(html_path, caption=f"HTML dump: {tag}{error_block}")
 
 
 def close_unwanted_popups(page):
@@ -361,12 +339,6 @@ def select_city(page, field_id: str, city_name: str, iata_code: str, timeout=120
     except Exception:
         actual_value = None
     logging.info(f"✅ {field_id} -> {city_name} ({iata_code}) seçildi. Input değeri: '{actual_value}'")
-    if not actual_value or iata_code not in actual_value:
-        logging.warning(
-            f"⚠️ {field_id} seçildi görünüyor ama input değeri beklenenle eşleşmiyor "
-            f"(beklenen kod: {iata_code}, gerçek değer: '{actual_value}'). "
-            f"Form submit sırasında bu alan boş/yanlış gidebilir."
-        )
 
 
 def select_departure_date(page, day: int, month: int, year: int, field_id: str = "external-depart-date", timeout=12000):
@@ -437,17 +409,6 @@ def select_departure_date(page, day: int, month: int, year: int, field_id: str =
         except Exception:
             pass
 
-    try:
-        actual_value = field.input_value()
-    except Exception:
-        actual_value = None
-    logging.info(f"Tarih alanı input değeri: '{actual_value}'")
-    if not actual_value:
-        logging.warning(
-            "⚠️ Tarih seçildi görünüyor ama input alanı boş. "
-            "Submit sırasında tarih formda gitmeyebilir."
-        )
-
 
 def debug_form_state(page):
     try:
@@ -469,13 +430,6 @@ def debug_form_state(page):
     except Exception as e:
         state = {"error": str(e)}
     logging.info(f"📋 Submit öncesi form durumu: {state}")
-    msg = (
-        "📋 <b>Submit öncesi form durumu</b>\n"
-        f"Nereden: <code>{state.get('depart_value')}</code>\n"
-        f"Nereye: <code>{state.get('arrival_value')}</code>\n"
-        f"Tarih: <code>{state.get('date_value')}</code>"
-    )
-    send_telegram(msg)
     return state
 
 
@@ -515,7 +469,6 @@ def click_search_button(page, timeout=12000):
     page.on("requestfailed", _on_request_failed)
 
     form_state = debug_form_state(page)
-
     url_before = page.url
     if not robust_click(page, btn, timeout):
         page.remove_listener("response", _on_response)
@@ -539,13 +492,6 @@ def click_search_button(page, timeout=12000):
 
     url_after = page.url
     logging.info(f"URL değişimi: '{url_before}' -> '{url_after}'")
-    for status, url, location in captured_responses:
-        if location:
-            logging.info(f"📡 Redirect yakalandı: {status} - {url} -> Location: {location}")
-        else:
-            logging.info(f"📡 Yakalanan network isteği: {status} - {url}")
-    for url, failure in failed_requests:
-        logging.warning(f"❌ Başarısız istek: {url} - Sebep: {failure}")
 
     landed_on_home = (
         url_after.rstrip("/") == HOME_URL.rstrip("/")
@@ -566,37 +512,12 @@ def click_search_button(page, timeout=12000):
             logging.info("Captcha popup polling ile de bulunamadı, gerçekten ana sayfaya düşülmüş görünüyor.")
 
     if landed_on_home:
-        redirect_lines = []
-        for status, url, location in captured_responses:
-            if location:
-                redirect_lines.append(f"• {status} — {url}\n   ↳ Location: {location}")
-            else:
-                redirect_lines.append(f"• {status} — {url}")
-        redirect_info = "\n".join(redirect_lines) or "Yok (network isteği yakalanamadı)"
-
-        failed_info = "\n".join(f"• {url} — {failure}" for url, failure in failed_requests) or "Yok"
-
-        form_info = (
-            f"Nereden: {form_state.get('depart_value')}\n"
-            f"Nereye: {form_state.get('arrival_value')}\n"
-            f"Tarih: {form_state.get('date_value')}"
-        )
         capture_debug(page, "redirected_to_home")
-        send_telegram(
-            "🚨 <b>Arama sonrası ana sayfaya geri atıldı!</b>\n\n"
-            f"URL (önce): <code>{url_before}</code>\n"
-            f"URL (sonra): <code>{url_after}</code>\n\n"
-            f"<b>Submit anındaki form değerleri:</b>\n{form_info}\n\n"
-            f"<b>Yakalanan network yanıtları (redirect'ler dahil):</b>\n{redirect_info}\n\n"
-            f"<b>Başarısız istekler:</b>\n{failed_info}"
-        )
         raise Exception(
             f"Arama sonrası ana sayfaya yönlendirildi (önce: {url_before}, sonra: {url_after}). "
             f"Form değerleri: {form_state}"
-        )
-
-
-def get_last_update_id():
+                                  )
+             def get_last_update_id():
     try:
         resp = requests.get(f"{TELEGRAM_API}/getUpdates", params={"limit": 1, "offset": -1}, timeout=15)
         results = resp.json().get("result", [])
@@ -671,7 +592,6 @@ def find_captcha_popup(page):
 
 
 def trigger_captcha_refresh(page, popup):
-    """CAPTCHA görselini yenilemek için tıklama/POST isteklerini tetikler."""
     try:
         refresh_resp = page.request.post("https://turkmenistanairlines.tm/refresh-captcha")
         if refresh_resp.ok:
@@ -703,14 +623,6 @@ def trigger_captcha_refresh(page, popup):
 
 
 def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, submit_url_builder=None):
-    """
-    Arama butonuna tıklandıktan sonra çağrılır.
-    - Captcha görselini ön işleme sokarak kalitesini artırır.
-    - Tam olarak 6 haneli kod elde edene kadar MAKSİMUM 3 YENİLEME yapar.
-    - ddddocr ile CAPTCHA görselini okuyup otomatik doldurur.
-    - Ekran görüntüsünü Telegram'a bilgilendirme amaçlı gönderir.
-    - OCR başarısız olursa yedek olarak Telegram üzerinden elle girişi bekler.
-    """
     page.wait_for_timeout(wait_after_click)
     popup, matched_sel = find_captcha_popup(page)
     if popup is None:
@@ -748,7 +660,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
     page.on("console", _on_diag_console)
     page.on("pageerror", _on_diag_pageerror)
 
-    # İlk açılışta yenileme tetiklemesi
     trigger_captcha_refresh(page, popup)
 
     try:
@@ -776,12 +687,11 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
 
     shot_path = "captcha_popup.png"
 
-    # =========================================================================
-    # OTOMATİK CAPTCHA ÇÖZÜMÜ (ddddocr & Görsel İyileştirme & Max 3 Yenileme)
-    # =========================================================================
     answer = None
     ocr = ddddocr.DdddOcr(show_ad=False)
-    max_refreshes = 3  # Maksimum 3 yenileme yapılması kuralı
+    
+    # 5 KEZ YENİLEME YAPILACAK ŞEKİLDE GÜNCELLENDİ
+    max_refreshes = 5 
 
     for refresh_attempt in range(max_refreshes + 1):
         if refresh_attempt > 0:
@@ -791,7 +701,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
 
         captcha_img_bytes = None
 
-        # 1. Öncelik: Doğrudan Captcha alanının ekran görüntüsünü al
         try:
             refresh_el = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first
             if refresh_el.count() == 0:
@@ -801,7 +710,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
         except Exception as e:
             logging.warning(f"Captcha elemanının ekran görüntüsü alınamadı: {e}")
 
-        # 2. Öncelik: Eleman resmi alınamadıysa genel ekran görüntüsünü al
         if not captcha_img_bytes:
             try:
                 popup.screenshot(path=shot_path)
@@ -812,15 +720,11 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
                 pass
 
         if captcha_img_bytes:
-            # Görseli keskinleştirme, gri tonlama ve büyütme işlemleri
             processed_bytes = preprocess_captcha_image(captcha_img_bytes)
-
             try:
-                # Önce iyileştirilmiş resim ile okuma yap
                 parsed_text = ocr.classification(processed_bytes)
                 clean_text = "".join(c for c in str(parsed_text or "").strip() if c.isalnum())
 
-                # Eğer iyileştirilmiş resimde 6 hane çıkmazsa ham resimle de bir dene
                 if len(clean_text) != 6:
                     raw_parsed = ocr.classification(captcha_img_bytes)
                     raw_clean = "".join(c for c in str(raw_parsed or "").strip() if c.isalnum())
@@ -829,7 +733,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
 
                 logging.info(f"🤖 ddddocr denemesi [{refresh_attempt}/{max_refreshes}] okunan: '{clean_text}' (Uzunluk: {len(clean_text)})")
 
-                # KONTROL: 6 haneli kod kuralı
                 if len(clean_text) == 6:
                     answer = clean_text
                     try:
@@ -841,7 +744,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
             except Exception as e:
                 logging.error(f"ddddocr okuma sırasında hata: {e}")
 
-    # Otomatik okuma tüm yenilemelere rağmen 6 hane olarak başarılı olamazsa Telegram'dan sor
     if not answer:
         try:
             popup.screenshot(path=shot_path)
@@ -850,7 +752,7 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
         logging.warning("⚠️ ddddocr ile 6 haneli captcha okunamadı. Telegram üzerinden manuel yanıt bekleniyor...")
         last_update_id = get_last_update_id()
         send_telegram(
-            "🧩 <b>Captcha 6 haneli okunamadı (3 Yenileme Tamamlandı)!</b>\n\n"
+            f"🧩 <b>Captcha 6 haneli okunamadı ({max_refreshes} Yenileme Tamamlandı)!</b>\n\n"
             "Lütfen görseldeki 6 haneli kodu bu sohbete yazın.",
             photo_path=shot_path
         )
@@ -861,10 +763,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
         raise Exception("Captcha cevabı alınamadı (timeout / OCR başarısız)")
 
     logging.info(f"✅ Kullanılacak captcha cevabı: {answer}")
-    send_telegram(
-        f"🤖 <b>Captcha Otomatik Geçiliyor:</b> <code>{answer}</code>",
-        photo_path=shot_path if os.path.exists(shot_path) else None
-    )
 
     input_selectors = [
         "#captchaInput",
@@ -990,7 +888,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
             pass
 
     page.wait_for_timeout(3000)
-    send_telegram("✅ Captcha cevabı gönderildi, sonuç kontrol ediliyor...")
     return True
 
 
@@ -1009,7 +906,6 @@ def run_with_retries(step_name, func, *args, retries=2, **kwargs):
 
 def run_ticket_bot():
     logging.info("=== Türkmenistan Airlines Bilet Botu Başlatıldı ===")
-    send_telegram("🧪 Test: Bot başladı, Telegram bağlantısı çalışıyor mu?")
 
     page = None
 
@@ -1065,7 +961,6 @@ def run_ticket_bot():
             time.sleep(3)
             close_unwanted_popups(page)
 
-            # --- GİRİŞ ---
             run_with_retries("Giriş yapma", login, page, retries=1)
 
             logging.info("Ana sayfaya geri dönülüyor...")
@@ -1088,16 +983,8 @@ def run_ticket_bot():
 
             close_unwanted_popups(page)
 
-            step1_screenshot = "step1_dasarky.png"
-            page.screenshot(path=step1_screenshot)
-            send_telegram(
-                f"<b>Adım 1:</b> Giriş yapıldı, Dış Hatlar Sekmesinde {ORIGIN_CITY} ➔ {DEST_CITY} ve Tarih Seçildi",
-                photo_path=step1_screenshot
-            )
-
             run_with_retries("Arama butonu", click_search_button, page)
 
-            # Otomatik ddddocr çözümü
             try:
                 handle_captcha_if_present(page)
             except Exception as e:
@@ -1141,33 +1028,4 @@ def run_ticket_bot():
                     calendar_screenshot = "calendar_month.png"
                     page.screenshot(path=calendar_screenshot, full_page=True)
                     send_telegram(
-                        f"📅 <b>Ay Takvim Görünümü</b>\n✈️ <b>Rota:</b> {ORIGIN_CITY} ➔ {DEST_CITY}",
-                        photo_path=calendar_screenshot
-                    )
-                except Exception as e:
-                    logging.error(f"Takvim sayfasına gidilemedi: {e}")
-                    send_telegram(f"⚠️ Takvim sayfasına gidilemedi: <code>{e}</code>")
-            else:
-                logging.warning("⚠️ Takvim linki (a.data-slider__calendar) bulunamadı, aylık görünüm atlanıyor.")
-                send_telegram("⚠️ Takvim linki bulunamadı, aylık görünüm gösterilemedi.")
-
-        except Exception as e:
-            err_msg = f"⚠️ <b>Bot Çalışırken Hata Meydana Geldi!</b>\n\nDetay: <code>{str(e)}</code>"
-            logging.error(f"Kritik hata: {e}")
-            try:
-                if page is not None:
-                    page.screenshot(path="hata_durumu.png")
-                    send_telegram(err_msg, photo_path="hata_durumu.png")
-                else:
-                    send_telegram(err_msg)
-            except Exception:
-                send_telegram(err_msg)
-
-        finally:
-            if browser is not None:
-                logging.info("Tarayıcı kapatılıyor.")
-                browser.close()
-
-
-if __name__ == "__main__":
-    run_ticket_bot()
+                        f"📅 <b>Ay Takvim Görünümü</b>\n✈️ <b>Rota:</b> {ORIGIN_CITY} ➔ {DE
