@@ -1028,4 +1028,31 @@ def run_ticket_bot():
                     calendar_screenshot = "calendar_month.png"
                     page.screenshot(path=calendar_screenshot, full_page=True)
                     send_telegram(
-                        f"📅 <b>Ay Takvim Görünümü</b>\n✈️ <b>Rota:</b> {ORIGIN_CITY} ➔ {DE
+                        f"📅 <b>Ay Takvim Görünümü</b>\n✈️ <b>Rota:</b> {ORIGIN_CITY} ➔ {DEST_CITY}",
+                        photo_path=calendar_screenshot
+                    )
+                except Exception as e:
+                    logging.error(f"Takvim sayfasına gidilemedi: {e}")
+            else:
+                logging.warning("⚠️ Takvim linki (a.data-slider__calendar) bulunamadı, aylık görünüm atlanıyor.")
+
+        except Exception as e:
+            err_msg = f"⚠️ <b>Bot Çalışırken Hata Meydana Geldi!</b>\n\nDetay: <code>{str(e)}</code>"
+            logging.error(f"Kritik hata: {e}")
+            try:
+                if page is not None:
+                    page.screenshot(path="hata_durumu.png")
+                    send_telegram(err_msg, photo_path="hata_durumu.png")
+                else:
+                    send_telegram(err_msg)
+            except Exception:
+                send_telegram(err_msg)
+
+        finally:
+            if browser is not None:
+                logging.info("Tarayıcı kapatılıyor.")
+                browser.close()
+
+
+if __name__ == "__main__":
+    run_ticket_bot()
