@@ -146,7 +146,7 @@ def capture_debug(page, tag):
         logging.warning(f"[{tag}] Form hataları: {errors}")
         def close_unwanted_popups(page):
             try:
-        page.evaluate("""() => {
+               page.evaluate("""() => {
             const modals = document.querySelectorAll('.modal, .popup, div[role="dialog"], #contact-modal, .modal-backdrop');
             modals.forEach(m => m.remove());
             document.body.classList.remove('modal-open');
