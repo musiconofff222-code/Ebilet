@@ -19,6 +19,7 @@ logging.basicConfig(
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 PHONE = os.environ.get("TM_PHONE", "71751555")
 PASSWORD = os.environ.get("TM_PASSWORD", "shazada")
 
@@ -565,6 +566,151 @@ def click_search_button(page, timeout=12000):
         )
 
 
+def get_last_update_id():
+    """Telegram'daki mevcut en son update_id'yi döndürür (offset başlangıcı için)."""
+    try:
+        resp = requests.get(f"{TELEGRAM_API}/getUpdates", params={"limit": 1, "offset": -1}, timeout=15)
+        results = resp.json().get("result", [])
+        if results:
+            return results[-1]["update_id"]
+    except Exception as e:
+        logging.warning(f"getUpdates (offset init) hata: {e}")
+    return None
+
+
+def get_telegram_reply(after_update_id=None, timeout=300, poll_interval=5):
+    """
+    CHAT_ID'den gelecek bir sonraki metin mesajını long-polling ile bekler.
+    Kullanıcı Telegram'da captcha cevabını yazana kadar (veya timeout'a kadar) bekler.
+    """
+    start = time.time()
+    offset = (after_update_id + 1) if after_update_id else None
+    while time.time() - start < timeout:
+        try:
+            resp = requests.get(
+                f"{TELEGRAM_API}/getUpdates",
+                params={"timeout": poll_interval, "offset": offset},
+                timeout=poll_interval + 15
+            )
+            data = resp.json()
+            for upd in data.get("result", []):
+                offset = upd["update_id"] + 1
+                msg = upd.get("message", {})
+                if str(msg.get("chat", {}).get("id")) == str(CHAT_ID) and "text" in msg:
+                    return msg["text"].strip(), upd["update_id"]
+        except Exception as e:
+            logging.warning(f"Telegram getUpdates hata: {e}")
+            time.sleep(2)
+    return None, offset
+
+
+def find_captcha_popup(page):
+    """
+    Arama sonrası açılan olası captcha popup'ını tespit etmeye çalışır.
+    NOT: Bu selector'lar genel/tahminidir. Popup açıkken F12 ile inceleyip
+    gerçek class/id isimlerini bu listenin başına eklerseniz tespit daha güvenilir olur.
+    """
+    selectors = [
+        "[class*='captcha']",
+        "[id*='captcha']",
+        "iframe[src*='captcha']",
+        "iframe[title*='captcha' i]",
+        "div[role='dialog']:has(img)",
+        ".modal:visible:has(img)",
+        ".popup:visible:has(img)",
+    ]
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                return loc, sel
+        except Exception:
+            continue
+    return None, None
+
+
+def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300):
+    """
+    Arama butonuna tıklandıktan sonra çağrılır.
+    1) Captcha popup'ı var mı diye bakar (yoksa sessizce çıkar)
+    2) Varsa ekran görüntüsünü Telegram'a yollar
+    3) Kullanıcının Telegram'dan yazacağı cevabı bekler (yarı otomatik)
+    4) Cevabı popup içindeki input'a yazıp onay/gönder butonuna tıklar
+    """
+    page.wait_for_timeout(wait_after_click)
+    popup, matched_sel = find_captcha_popup(page)
+    if popup is None:
+        logging.info("Captcha popup görünmüyor, devam ediliyor.")
+        return False
+
+    logging.info(f"🧩 Captcha popup tespit edildi (selector: {matched_sel}).")
+
+    shot_path = "captcha_popup.png"
+    try:
+        popup.screenshot(path=shot_path)
+    except Exception:
+        page.screenshot(path=shot_path)
+
+    last_update_id = get_last_update_id()
+
+    send_telegram(
+        "🧩 <b>Captcha tespit edildi!</b>\n\n"
+        "Lütfen görseldeki kodu bu sohbete yazın (sadece cevabı yazın).",
+        photo_path=shot_path
+    )
+
+    answer, _ = get_telegram_reply(after_update_id=last_update_id, timeout=answer_timeout)
+
+    if not answer:
+        send_telegram("⏱️ Captcha cevabı zamanında gelmedi, işlem durduruluyor.")
+        raise Exception("Captcha cevabı Telegram'dan alınamadı (timeout)")
+
+    logging.info(f"✅ Telegram'dan captcha cevabı alındı: {answer}")
+
+    input_selectors = [
+        "input[name*='captcha' i]",
+        "input[id*='captcha' i]",
+        "input[type='text']",
+    ]
+    filled = False
+    for isel in input_selectors:
+        try:
+            inp = popup.locator(isel).first
+            if inp.count() == 0:
+                inp = page.locator(isel).first
+            if inp.count() > 0 and inp.is_visible():
+                inp.click()
+                inp.fill(answer)
+                filled = True
+                break
+        except Exception:
+            continue
+
+    if not filled:
+        capture_debug(page, "captcha_input_not_found")
+        raise Exception("Captcha input alanı bulunamadı, cevap yazılamadı")
+
+    confirm_texts = ["Onayla", "Gönder", "Devam", "Submit", "Confirm", "OK", "Tamam"]
+    confirmed = False
+    for t in confirm_texts:
+        if find_and_click_across_frames(page, t, exact=False, timeout=3000):
+            confirmed = True
+            break
+
+    if not confirmed:
+        try:
+            btn = popup.locator("button[type='submit'], button").first
+            if btn.count() > 0:
+                robust_click(page, btn)
+                confirmed = True
+        except Exception:
+            pass
+
+    page.wait_for_timeout(3000)
+    send_telegram("✅ Captcha cevabı gönderildi, sonuç kontrol ediliyor...")
+    return True
+
+
 def run_with_retries(step_name, func, *args, retries=2, **kwargs):
     last_err = None
     for attempt in range(1, retries + 2):
@@ -668,6 +814,13 @@ def run_ticket_bot():
             )
 
             run_with_retries("Arama butonu", click_search_button, page)
+
+            # --- Captcha kontrolü: varsa Telegram üzerinden yarı otomatik çözülür ---
+            try:
+                handle_captcha_if_present(page)
+            except Exception as e:
+                logging.error(f"Captcha çözüm adımı başarısız: {e}")
+                raise
 
             time.sleep(6)
             page.evaluate("window.scrollTo(0, 250)")
