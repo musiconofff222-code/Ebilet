@@ -1,0 +1,64 @@
+name: Turkmenistan Airlines Ticket Bot
+
+on:
+  workflow_dispatch: # GitHub Arayüzünden elle başlatabilmek için
+  schedule:
+    # Türkmenistan saatiyle (UTC+5) 08:00 - 21:00 arasına denk gelen UTC saatlerinde her 15 dakikada bir tetiklenir
+    - cron: '*/15 3-15 * * *'
+
+concurrency:
+  group: ticket-bot-execution
+  cancel-in-progress: false
+
+jobs:
+  run-ticket-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Kodları Çek (Checkout)
+        uses: actions/checkout@v4
+
+      # KARARLI SAAT KONTROLÜ (Tek haneli saatlerdeki 08/09 oktal hatasını önlemek için %-H kullanıldı)
+      - name: Yerel Saat Kontrolü (Türkmenistan: 08:00 - 21:00)
+        id: time-check
+        run: |
+          HOUR=$(TZ="Asia/Ashgabat" date +%-H)
+          echo "Türkmenistan Saati: $HOUR:00"
+          
+          if [ "$HOUR" -ge 21 ] || [ "$HOUR" -lt 8 ]; then
+            echo "ALLOWED=false" >> $GITHUB_ENV
+            echo "⛔ Gece saat aralığındayız (21:00 - 08:00). Bot çalıştırılmayacak."
+          else
+            echo "ALLOWED=true" >> $GITHUB_ENV
+            echo "✅ Çalışma saatleri içindeyiz (08:00 - 21:00)."
+          fi
+
+      - name: Python Kurulumu (3.10)
+        if: env.ALLOWED == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Python Bağımlılıklarını Yükle
+        if: env.ALLOWED == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright ddddocr Pillow requests
+
+      - name: Playwright Tarayıcı ve Sistem Bağımlılıklarını Kur
+        if: env.ALLOWED == 'true'
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Bilet Botunu Çalıştır
+        if: env.ALLOWED == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TM_PHONE: ${{ secrets.TM_PHONE }}
+          TM_PASSWORD: ${{ secrets.TM_PASSWORD }}
+          TM_PROXY_SERVER: ${{ secrets.TM_PROXY_SERVER }}
+        run: |
+          python bot.py
