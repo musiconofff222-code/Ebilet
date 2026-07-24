@@ -517,7 +517,7 @@ def click_search_button(page, timeout=12000):
             f"Arama sonrası ana sayfaya yönlendirildi (önce: {url_before}, sonra: {url_after}). "
             f"Form değerleri: {form_state}"
                                   )
-             def get_last_update_id():
+def get_last_update_id():
     try:
         resp = requests.get(f"{TELEGRAM_API}/getUpdates", params={"limit": 1, "offset": -1}, timeout=15)
         results = resp.json().get("result", [])
