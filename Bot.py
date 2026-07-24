@@ -480,7 +480,7 @@ def click_search_button(page, timeout=12000):
                 except Exception:
                     location = "(okunamadı)"
                 captured_responses.append((status, url, location))
-            elif status >= 400 or any(k in url.lower() for k in ["search", "flight", "ticket", "external"]):
+            elif status >= 400 or any(k in url.lower() for k in ["search", "flight", "ticket", "external", "captcha", "recaptcha"]):
                 captured_responses.append((status, url, None))
         except Exception:
             pass
@@ -550,7 +550,7 @@ def click_search_button(page, timeout=12000):
             logging.info(f"🧩 'Ana sayfaya düştük' zannedilen durum aslında captcha popup'ı (selector: {captcha_sel}). Hata fırlatılmıyor.")
             landed_on_home = False
         else:
-            logging.info("Captcha popup polling ile de bulunamadı, gerçekten ana sayfaya düşülmüş görünüyor.")
+            llogging.info("Captcha popup polling ile de bulunamadı, gerçekten ana sayfaya düşülmüş görünüyor.")
 
     if landed_on_home:
         redirect_lines = []
@@ -690,9 +690,39 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300):
 
     logging.info(f"🧩 Captcha popup tespit edildi (selector: {matched_sel}).")
 
-    # --- YENİ: popup'ı zorla görünür kıldığımız için, görseli asıl yükleyen
-    # JS tetikleyicisi (muhtemelen #refreshRecaptcha'nın click handler'ı) hiç
-    # çalışmamış olabilir. Görseli yüklemesi için tıklamayı deniyoruz.
+    # --- YENİ: görsel neden yüklenmiyor teşhisi için network + console/JS hatalarını izle ---
+    diag_network_hits = []
+    diag_console_msgs = []
+    diag_page_errors = []
+
+    def _on_diag_response(response):
+        try:
+            u = response.url.lower()
+            if "captcha" in u or "recaptcha" in u:
+                diag_network_hits.append((response.status, response.url))
+        except Exception:
+            pass
+
+    def _on_diag_console(msg):
+        try:
+            if msg.type in ("error", "warning"):
+                diag_console_msgs.append(f"[{msg.type}] {msg.text}")
+        except Exception:
+            pass
+
+    def _on_diag_pageerror(exc):
+        try:
+            diag_page_errors.append(str(exc))
+        except Exception:
+            pass
+
+    page.on("response", _on_diag_response)
+    page.on("console", _on_diag_console)
+    page.on("pageerror", _on_diag_pageerror)
+
+    # --- popup'ı zorla görünür kıldığımız için, görseli asıl yükleyen JS tetikleyicisi
+    # (muhtemelen #refreshRecaptcha'nın click handler'ı) hiç çalışmamış olabilir.
+    # Görseli yüklemesi için tıklamayı deniyoruz.
     try:
         refresh_el = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first
         if refresh_el.count() == 0:
@@ -703,6 +733,29 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300):
             logging.info("🔄 refreshRecaptcha tıklandı, görselin yüklenmesi bekleniyor.")
     except Exception as e:
         logging.warning(f"refreshRecaptcha tıklanamadı: {e}")
+
+    page.remove_listener("response", _on_diag_response)
+    page.remove_listener("console", _on_diag_console)
+    page.remove_listener("pageerror", _on_diag_pageerror)
+
+    if diag_network_hits or diag_console_msgs or diag_page_errors:
+        diag_lines = ["🔬 <b>Captcha görsel teşhisi:</b>"]
+        if diag_network_hits:
+            diag_lines.append("Captcha ile ilgili network istekleri:")
+            for status, url in diag_network_hits:
+                diag_lines.append(f"• {status} — {url}")
+        else:
+            diag_lines.append("Captcha ile ilgili HİÇBİR network isteği yakalanmadı (tıklama isteği tetiklemedi).")
+        if diag_page_errors:
+            diag_lines.append("\nJS sayfa hataları:")
+            for e in diag_page_errors[:5]:
+                diag_lines.append(f"• {e}")
+        if diag_console_msgs:
+            diag_lines.append("\nConsole error/warning:")
+            for m in diag_console_msgs[:5]:
+                diag_lines.append(f"• {m}")
+        send_telegram("\n".join(diag_lines))
+        logging.info("\n".join(diag_lines))
 
     shot_path = "captcha_popup.png"
     try:
