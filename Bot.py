@@ -690,17 +690,51 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300):
 
     logging.info(f"🧩 Captcha popup tespit edildi (selector: {matched_sel}).")
 
+    # --- YENİ: popup'ı zorla görünür kıldığımız için, görseli asıl yükleyen
+    # JS tetikleyicisi (muhtemelen #refreshRecaptcha'nın click handler'ı) hiç
+    # çalışmamış olabilir. Görseli yüklemesi için tıklamayı deniyoruz.
+    try:
+        refresh_el = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first
+        if refresh_el.count() == 0:
+            refresh_el = page.locator("#refreshRecaptcha, .refreshRecaptcha").first
+        if refresh_el.count() > 0:
+            robust_click(page, refresh_el, timeout=5000)
+            page.wait_for_timeout(2000)
+            logging.info("🔄 refreshRecaptcha tıklandı, görselin yüklenmesi bekleniyor.")
+    except Exception as e:
+        logging.warning(f"refreshRecaptcha tıklanamadı: {e}")
+
     shot_path = "captcha_popup.png"
     try:
         popup.screenshot(path=shot_path)
     except Exception:
         page.screenshot(path=shot_path)
 
+    # --- YENİ: görsel gerçekten yüklendi mi diye teşhis ---
+    image_loaded = False
+    try:
+        bg_info = popup.locator("#refreshRecaptcha, .refreshRecaptcha").first.evaluate(
+            """el => {
+                const cs = window.getComputedStyle(el);
+                return {bg: cs.backgroundImage, w: el.offsetWidth, h: el.offsetHeight};
+            }"""
+        )
+        logging.info(f"Captcha görsel bilgisi: {bg_info}")
+        if bg_info.get("bg") and bg_info["bg"] != "none":
+            image_loaded = True
+    except Exception as e:
+        logging.warning(f"Captcha görsel kontrolü yapılamadı: {e}")
+
+    if not image_loaded:
+        logging.warning("⚠️ Captcha görseli yüklenmemiş görünüyor (arka plan resmi yok).")
+        capture_debug(page, "captcha_image_not_loaded")
+
     last_update_id = get_last_update_id()
 
     send_telegram(
         "🧩 <b>Captcha tespit edildi!</b>\n\n"
-        "Lütfen görseldeki kodu bu sohbete yazın (sadece cevabı yazın).",
+        "Lütfen görseldeki kodu bu sohbete yazın (sadece cevabı yazın)."
+        + ("" if image_loaded else "\n\n⚠️ Görsel yüklenmemiş olabilir, debug dump'ına bakın."),
         photo_path=shot_path
     )
 
