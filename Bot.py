@@ -161,12 +161,12 @@ def robust_click(ctx, locator, timeout=10000):
         locator.first.scroll_into_view_if_needed()
         locator.first.click(timeout=6000)
         return True
-    except PlaywrightTimeoutError:
+    except Exception:
         pass
     try:
         locator.first.click(timeout=6000, force=True)
         return True
-    except PlaywrightTimeoutError:
+    except Exception:
         pass
     try:
         locator.first.evaluate("el => el.click()")
@@ -550,7 +550,7 @@ def click_search_button(page, timeout=12000):
             logging.info(f"🧩 'Ana sayfaya düştük' zannedilen durum aslında captcha popup'ı (selector: {captcha_sel}). Hata fırlatılmıyor.")
             landed_on_home = False
         else:
-            llogging.info("Captcha popup polling ile de bulunamadı, gerçekten ana sayfaya düşülmüş görünüyor.")
+            logging.info("Captcha popup polling ile de bulunamadı, gerçekten ana sayfaya düşülmüş görünüyor.")
 
     if landed_on_home:
         redirect_lines = []
@@ -728,6 +728,21 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300):
         if refresh_el.count() == 0:
             refresh_el = page.locator("#refreshRecaptcha, .refreshRecaptcha").first
         if refresh_el.count() > 0:
+            # --- YENİ: element genişliği 0 olabiliyor (site'nin gerçek 'show' akışı
+            # çalışmadığı için CSS boyutu set edilmemiş). Görsel yüklense bile
+            # görünür olması için minimum boyut zorluyoruz.
+            try:
+                refresh_el.evaluate(
+                    """el => {
+                        el.style.setProperty('min-width', '200px', 'important');
+                        el.style.setProperty('min-height', '60px', 'important');
+                        el.style.setProperty('display', 'inline-block', 'important');
+                        el.style.setProperty('background-size', 'contain', 'important');
+                        el.style.setProperty('background-repeat', 'no-repeat', 'important');
+                    }"""
+                )
+            except Exception:
+                pass
             robust_click(page, refresh_el, timeout=5000)
             page.wait_for_timeout(2000)
             logging.info("🔄 refreshRecaptcha tıklandı, görselin yüklenmesi bekleniyor.")
