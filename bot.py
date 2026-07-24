@@ -546,7 +546,7 @@ def get_telegram_reply(after_update_id=None, timeout=300, poll_interval=5):
             time.sleep(2)
     return None, offset
     def find_captcha_popup(page):
-    selectors = [
+       selectors = [
         "#captchaPopup",
         "[id*='captcha' i]",
         "[class*='captcha' i]",
