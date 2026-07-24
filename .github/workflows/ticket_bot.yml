@@ -1,0 +1,46 @@
+name: TM Ticket Bot
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # Her saat baÅŸÄ± Ã§alÄ±ÅŸÄ±r (UTC)
+  workflow_dispatch: {}   # Elle tetiklemek istersen "Run workflow" butonu
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Repo'yu Ã§ek
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: BaÄŸÄ±mlÄ±lÄ±klarÄ± kur
+        run: |
+          pip install --upgrade pip
+          pip install playwright requests
+          playwright install --with-deps chromium
+
+      - name: Botu Ã§alÄ±ÅŸtÄ±r
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TM_PHONE: ${{ secrets.TM_PHONE }}
+          TM_PASSWORD: ${{ secrets.TM_PASSWORD }}
+        run: python tm_bot.py
+
+      - name: Debug dosyalarÄ±nÄ± arÅŸivle (hata olsa da olmasa da)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-files
+          path: |
+            debug_*.png
+            debug_*.html
+            hata_durumu.png
+            step1_*.png
+          if-no-files-found: ignore
