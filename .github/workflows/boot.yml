@@ -24,7 +24,7 @@ jobs:
         run: |
           HOUR=$(TZ="Asia/Ashgabat" date +%-H)
           echo "Turkmenistan Saati: $HOUR:00"
-          if [ "$HOUR" -ge 21 ] || [ "$HOUR" -lt 8 ]; then
+          if [ "$HOUR" -ge 23 ] || [ "$HOUR" -lt 8 ]; then
             echo "ALLOWED=false" >> $GITHUB_ENV
             echo "Gece saat araligindayiz (21:00 - 08:00). Bot calistirilmayacak."
           else
