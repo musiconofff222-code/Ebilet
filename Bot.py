@@ -4,8 +4,10 @@ import time
 import logging
 import warnings
 import random
+import io
 import requests
 import ddddocr
+from PIL import Image, ImageEnhance
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -633,12 +635,32 @@ def find_captcha_popup(page):
     return None, None
 
 
+def preprocess_captcha_image(image_bytes):
+    """CAPTCHA görselini 2x büyütür, grileştirir ve kontrastını artırarak okuma kalitesini yükseltir."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        # 1. Görseli 2 kat büyüt (Rakam yapışmasını önler)
+        img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
+        # 2. Gri tonlamaya çevir
+        img = img.convert('L')
+        # 3. Kontrastı 2.5 kat artır
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.5)
+        
+        output = io.BytesIO()
+        img.save(output, format='PNG')
+        return output.getvalue()
+    except Exception as e:
+        logging.warning(f"Görsel ön işleme hatası: {e}")
+        return image_bytes
+
+
 def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, submit_url_builder=None):
     """
     Arama butonuna tıklandıktan sonra çağrılır.
-    - ddddocr ile CAPTCHA görselini okuyup otomatik doldurur.
+    - ddddocr + Görsel İyileştirme ile CAPTCHA görselini okuyup otomatik doldurur.
     - Ekran görüntüsünü Telegram'a bilgilendirme amaçlı gönderir.
-    - OCR başarısız olursa yedek olarak Telegram üzerinden elle girişi bekler.
+    - OCR başarısız olursa (6 hane okunmazsa) yedek olarak Telegram üzerinden elle girişi bekler.
     """
     page.wait_for_timeout(wait_after_click)
     popup, matched_sel = find_captcha_popup(page)
@@ -737,7 +759,7 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
         page.screenshot(path=shot_path)
 
     # =========================================================================
-    # OTOMATİK CAPTCHA ÇÖZÜMÜ (ddddocr)
+    # OTOMATİK CAPTCHA ÇÖZÜMÜ (ddddocr + Visual Preprocessing)
     # =========================================================================
     answer = None
     try:
@@ -760,20 +782,31 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
                 captcha_img_bytes = f.read()
 
         if captcha_img_bytes:
-            parsed_text = ocr.classification(captcha_img_bytes)
+            # Görseli netleştirmek için preprocess uyguluyoruz
+            processed_bytes = preprocess_captcha_image(captcha_img_bytes)
+            parsed_text = ocr.classification(processed_bytes)
+            
             if parsed_text and str(parsed_text).strip():
-                answer = str(parsed_text).strip()
-                logging.info(f"🤖 ddddocr başarıyla captcha okudu: {answer}")
+                candidate = str(parsed_text).strip()
+                # 📌 KRİTİK KONTROL: Kod 6 haneli ve sadece rakamlardan mı oluşuyor?
+                if len(candidate) == 6 and candidate.isdigit():
+                    answer = candidate
+                    logging.info(f"🤖 ddddocr başarıyla 6 haneli captcha okudu: {answer}")
+                else:
+                    logging.warning(
+                        f"⚠️ ddddocr eksik/yanlış okudu ({candidate}, uzunluk: {len(candidate)}). "
+                        f"Otomatik yanıt kabul edilmiyor."
+                    )
     except Exception as e:
         logging.error(f"ddddocr çalıştırılırken hata oluştu: {e}")
 
-    # Otomatik okuma başarısız olursa yedek olarak Telegram'dan elle yanıt alma akışı
+    # Otomatik okuma başarısız/eksik olursa Telegram üzerinden manuel yanıt alma akışı
     if not answer:
-        logging.warning("⚠️ ddddocr ile captcha okunamadı. Telegram üzerinden manuel yanıt bekleniyor...")
+        logging.warning("⚠️ ddddocr ile 6 haneli captcha okunamadı. Telegram üzerinden manuel yanıt bekleniyor...")
         last_update_id = get_last_update_id()
         send_telegram(
-            "🧩 <b>Captcha tespit edildi (Otomatik okunamadı)!</b>\n\n"
-            "Lütfen görseldeki kodu bu sohbete yazın.",
+            "🧩 <b>Captcha otomatik okunamadı / eksik okundu!</b>\n\n"
+            "Lütfen görseldeki 6 haneli kodu bu sohbete yazın.",
             photo_path=shot_path
         )
         answer, _ = get_telegram_reply(after_update_id=last_update_id, timeout=answer_timeout)
@@ -914,7 +947,6 @@ def handle_captcha_if_present(page, wait_after_click=3000, answer_timeout=300, s
     page.wait_for_timeout(3000)
     send_telegram("✅ Captcha cevabı gönderildi, sonuç kontrol ediliyor...")
     return True
-
 
 def run_with_retries(step_name, func, *args, retries=2, **kwargs):
     last_err = None
@@ -1093,4 +1125,3 @@ def run_ticket_bot():
 
 if __name__ == "__main__":
     run_ticket_bot()
-   
