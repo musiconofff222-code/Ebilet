@@ -1,46 +1,49 @@
-name: TM Ticket Bot
+name: TM Bilet Botu
 
 on:
+  workflow_dispatch: # Manuel çalıştırma butonu
   schedule:
-    - cron: '0 * * * *'   # Her saat baÅŸÄ± Ã§alÄ±ÅŸÄ±r (UTC)
-  workflow_dispatch: {}   # Elle tetiklemek istersen "Run workflow" butonu
+    - cron: '*/20 * * * *' # Her 20 dakikada bir otomatik çalışır
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10 # Kilitlenme ve sonsuz takılmaya karşı güvenlik sınırı
 
     steps:
-      - name: Repo'yu Ã§ek
+      - name: Repoyu Klonla (Checkout)
         uses: actions/checkout@v4
 
-      - name: Python kur
+      - name: Python Ortamını Kur (Python 3.10)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      - name: BaÄŸÄ±mlÄ±lÄ±klarÄ± kur
+      - name: Sistem Bağımlılıklarını ve Kütüphaneleri Kur
         run: |
-          pip install --upgrade pip
-          pip install playwright requests
-          playwright install --with-deps chromium
+          python -m pip install --upgrade pip
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-glx libglib2.0-0
+          pip install requests playwright ddddocr
+          npx playwright install --with-deps chromium
 
-      - name: Botu Ã§alÄ±ÅŸtÄ±r
+      - name: Bilet Botunu Çalıştır
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TM_PHONE: ${{ secrets.TM_PHONE }}
           TM_PASSWORD: ${{ secrets.TM_PASSWORD }}
-        run: python Bot.py
+          TM_PROXY_SERVER: ${{ secrets.TM_PROXY_SERVER }}
+        run: |
+          python Bot.py
 
-      - name: Debug dosyalarÄ±nÄ± arÅŸivle (hata olsa da olmasa da)
+      - name: Hata veya Ekran Görüntülerini Yükle
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-files
+          name: debug-and-screenshots
           path: |
-            debug_*.png
-            debug_*.html
-            hata_durumu.png
-            step1_*.png
-          if-no-files-found: ignore
+            *.png
+            *.html
+          retention-days: 7
+          
