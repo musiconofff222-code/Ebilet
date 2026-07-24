@@ -31,7 +31,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TM_PHONE: ${{ secrets.TM_PHONE }}
           TM_PASSWORD: ${{ secrets.TM_PASSWORD }}
-        run: python tm_bot.py
+        run: python Bot.py
 
       - name: Debug dosyalarÄ±nÄ± arÅŸivle (hata olsa da olmasa da)
         if: always()
